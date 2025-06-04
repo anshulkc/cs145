@@ -210,6 +210,8 @@ class CompetitionDataGenerator:
         
         # Remove duplicates
         history_df_pd = history_df_pd.drop_duplicates(subset=["user_idx", "item_idx"])
+        # Reset index after dropping duplicates to ensure continuous index for timestamp
+        history_df_pd.reset_index(drop=True, inplace=True)
         
         # Get user and item features for dot product calculation
         users_df_pd = self.users_df.toPandas()
@@ -220,6 +222,7 @@ class CompetitionDataGenerator:
         item_features = items_df_pd[[col for col in items_df_pd.columns if col.startswith("item_attr_")]].values
         
         # Calculate relevance (based on dot product of user and item features)
+        # Ensure indices are aligned after potential drop_duplicates
         users_matrix = user_features[history_df_pd["user_idx"].values]
         items_matrix = item_features[history_df_pd["item_idx"].values]
         
@@ -228,9 +231,12 @@ class CompetitionDataGenerator:
         
         # Convert to binary relevance (1 if dot product is positive, 0 otherwise)
         history_df_pd["relevance"] = np.where(dot_products > 0, 1, 0)
+
+        # Add a synthetic timestamp (e.g., row index as a simple increasing timestamp)
+        history_df_pd["timestamp"] = history_df_pd.index.astype(np.int64)
         
         # Convert to Spark DataFrame
-        self.history_df = pandas_to_spark(history_df_pd)
+        self.history_df = pandas_to_spark(history_df_pd, spark_session=self.spark)
         
         return self.history_df
     

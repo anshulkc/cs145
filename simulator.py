@@ -450,6 +450,11 @@ class CompetitionSimulator:
             action_models=self.response_pipeline
         ).cache()
         
+        # ---- DEBUG PRINT SCHEMA ----
+        print("Schema of true_responses:")
+        true_responses.printSchema()
+        # ---- END DEBUG ----
+
         # Calculate basic metrics
         metrics = self.evaluator(true_responses)
         
@@ -461,29 +466,57 @@ class CompetitionSimulator:
         total_revenue = true_responses.agg(sf.sum("revenue")).collect()[0][0]
         
         # Log responses in simulator
-        log_update = true_responses.select(
-            "user_idx", "item_idx", "relevance", "response"
-        )
+        # The sim4rec.Simulator.update_log method will add its own timestamp and iteration columns.
+        # We need to provide user_idx, item_idx, and relevance.
+        # true_responses contains 'response' which should be used or converted to 'relevance' if needed by underlying log.
+        # The current code already casts 'relevance' from true_responses (which might be a float/double prob) to long.
+        # Let's ensure the selected columns for log_update are what sim4rec expects (typically user, item, relevance).
+        # The existing log schema (from initial history_df) is: user_idx, item_idx, relevance, timestamp.
+        # sim4rec.update_log will add its own __timestamp and __iter.
+        # The _check_names_and_types error we saw earlier was because our log_update was missing timestamp,
+        # which means the self._log_schema in sim4rec *was* expecting it because our initial log had it.
+        # This implies sim4rec.update_log *does* expect the input df to match the established log schema.
+
+        # Therefore, we *must* add a timestamp to log_update if the main log has it.
+        # Since true_responses does not have it, we need to add it, e.g., current system time or an iteration-based one.
+        # The simplest way to ensure schema match is to add a timestamp when preparing log_update.
+        # The sim4rec internal __timestamp will likely be more robust for its internal ordering.
+        # Let's use the current timestamp from Spark functions for the explicit 'timestamp' column.
+
+        current_ts = sf.current_timestamp()
+
+        log_update_selected_cols = [
+            sf.col("user_idx"),
+            sf.col("item_idx"),
+            sf.col("relevance").cast("long").alias("relevance"), # Ensure relevance is long as per earlier logic
+        ]
+
+        # If the base log schema (established by initial_history_df) has 'timestamp',
+        # then log_update must also provide it.
+        if self.simulator.log is not None and 'timestamp' in self.simulator.log.columns:
+             # true_responses doesn't have 'timestamp', so we add it here.
+             # This ensures the DataFrame passed to update_log matches the existing log schema.
+            log_update = true_responses.select(
+                "user_idx", 
+                "item_idx", 
+                sf.col("relevance").cast("long").alias("relevance")
+            ).withColumn("timestamp", current_ts.cast("long")) # Add timestamp, cast to long to match original schema
+        else:
+            # If the base log doesn't have timestamp (should not happen with current data_generator)
+            log_update = true_responses.select(
+                "user_idx", 
+                "item_idx", 
+                sf.col("relevance").cast("long").alias("relevance")
+            )
         
-        # Convert the relevance column from DoubleType to LongType to match the schema
-        # and drop the response column since it's not in the original schema
-        log_update = log_update.select(
-            "user_idx", 
-            "item_idx", 
-            sf.col("relevance").cast("long").alias("relevance")
-        )
+        # The sim4rec.update_log method also adds __iter and __timestamp internally.
+        # The explicit 'timestamp' column here is to match the schema of the initial log if it contained it.
         
-        # Add a placeholder for the __iter column that will be treated specially by update_log
-        # This is to match the existing schema in the Simulator's log
-        if self.simulator.log is not None:
-            log_schema = self.simulator.log.schema
-            iter_col_exists = any(field.name == self.simulator.ITER_COLUMN for field in log_schema.fields)
-            
-            if iter_col_exists:
-                # We don't actually need to add the column here since update_log will handle it
-                # But we need to make sure it's compatible with the schema check
-                pass
-        
+        # ---- DEBUG PRINT SCHEMA of log_update ----
+        print("Schema of log_update before self.simulator.update_log:")
+        log_update.printSchema()
+        # ---- END DEBUG ----
+
         # Update the log
         self.simulator.update_log(log_update, iteration=iteration if iteration is not None else len(self.metrics_history))
         

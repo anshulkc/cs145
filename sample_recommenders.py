@@ -47,50 +47,186 @@ class SVMRecommender(BaseRecommender):
         # user_features.show(5)
         # item_features.show(5)
 
-        if user_features and item_features:
-            pd_log = log.join(
-                user_features, 
+        if user_features is not None and item_features is not None:
+            # Define expected feature prefixes and fixed column names from the log
+            user_feature_cols = [col for col in user_features.columns if col.startswith('user_attr_') or col == 'user_idx']
+            item_feature_cols = [col for col in item_features.columns if col.startswith('item_attr_') or col == 'item_idx' or col == 'price' or col == 'category']
+            log_cols_to_keep = ['user_idx', 'item_idx', 'relevance'] # Keep relevant log columns
+
+            # Select only necessary columns to avoid unintended features
+            uf_selected = user_features.select(user_feature_cols)
+            if_selected = item_features.select(item_feature_cols)
+            log_selected = log.select(log_cols_to_keep)
+
+            # Join the selected data
+            joined_df = log_selected.join(
+                uf_selected, 
                 on='user_idx'
             ).join(
-                item_features, 
+                if_selected, 
                 on='item_idx'
-            ).drop(
-                'user_idx', 'item_idx', '__iter'
-            ).toPandas()
+            )
+            
+            # Now convert to pandas and prepare for SVM
+            pd_log = joined_df.toPandas()
 
-            pd_log = pd.get_dummies(pd_log, dtype=float)
-            pd_log['price'] = self.scalar.fit_transform(pd_log[['price']])
+            # Ensure 'user_idx' and 'item_idx' are dropped *after* join if they are not features for SVM
+            # SVM typically doesn't use IDs as direct features after joins create a feature matrix.
+            if 'user_idx' in pd_log.columns:
+                pd_log = pd_log.drop('user_idx', axis=1)
+            if 'item_idx' in pd_log.columns:
+                pd_log = pd_log.drop('item_idx', axis=1)
+
+            # One-hot encode categorical features (e.g., 'segment' from users, 'category' from items)
+            # Segment and category columns should be included in item_feature_cols / user_feature_cols if they exist and are to be used
+            # Assuming they are already selected if present in original user_features/item_features
+            pd_log = pd.get_dummies(pd_log, dtype=float) # This will encode 'segment', 'category' if they are string type
+            
+            # Scale price if it exists (it should be in if_selected)
+            if 'price' in pd_log.columns:
+                pd_log['price'] = self.scalar.fit_transform(pd_log[['price']])
+            else:
+                print("Warning: 'price' column not found for SVM scaling during fit.")
+
+            if 'relevance' not in pd_log.columns:
+                print("CRITICAL: 'relevance' column is missing before SVM training.")
+                return # Cannot train without target
 
             y = pd_log['relevance']
             x = pd_log.drop(['relevance'], axis=1)
+            
+            # Store feature names used during fit
+            self.feature_names_in_ = list(x.columns)
+            print(f"SVMRecommender training with features: {self.feature_names_in_}")
 
             self.model.fit(x,y)
+        else:
+            print("SVMRecommender: user_features or item_features not provided. Skipping fit.")
 
     def predict(self, log, k, users:DataFrame, items:DataFrame, user_features=None, item_features=None, filter_seen_items=True):
-        cross = users.join(
-            items
-        ).drop('__iter').toPandas().copy()
+        if not hasattr(self, 'feature_names_in_') or not self.feature_names_in_:
+            print("SVMRecommender has not been fitted or has no features. Returning empty predictions.")
+            # Fallback: return empty DataFrame or random - needs a proper empty Spark DF structure.
+            # For now, let's try to make it compatible with expected output or raise error.
+            # This requires knowing the expected schema for empty recs.
+            # Based on MyRecommender, an empty cross join with relevance is one way.
+            # However, the simulation calls predict before fit for initial state, so it should handle this.
+            # The original RandomRecommender returns a populated DF. SVM needs a more graceful pre-fit predict.
+            
+            # Let's return what a non-fitted model might imply: no confident predictions.
+            # The calling code expects a Spark DF. Let's create an empty one with required schema.
+            # From MyRecommender example: user_idx, item_idx, relevance.
+            spark = users.sparkSession
+            schema = users.select("user_idx").schema.add("item_idx", "long").add("relevance", "double")
+            return spark.createDataFrame([], schema)
 
-        cross = pd.get_dummies(cross, dtype=float)
+        # Prepare features for prediction, ensuring they match fit-time features
+        # Define expected feature prefixes and fixed column names
+        user_feature_cols = [col for col in user_features.columns if col.startswith('user_attr_') or col == 'user_idx' or col == 'segment']
+        item_feature_cols = [col for col in item_features.columns if col.startswith('item_attr_') or col == 'item_idx' or col == 'price' or col == 'category']
+        
+        uf_selected = user_features.select(user_feature_cols)
+        if_selected = items.select(item_feature_cols)
+
+        cross_df_spark = users.select('user_idx', 'segment').crossJoin(if_selected) # Keep user_idx for grouping, segment for dummifying
+        
+        cross = cross_df_spark.toPandas()
+
+        # Store original price and item_idx before dummifying and scaling
         cross['orig_price'] = cross['price']
-        cross['price'] = self.scalar.transform(cross[['price']])
+        # user_idx and item_idx will be used for grouping later, keep them until pandas_to_spark conversion needs specific schema
 
-        cross['prob'] = self.model.predict_proba(cross.drop(['user_idx', 'item_idx', 'orig_price'], axis=1))[:,np.where(self.model.classes_ == 1)[0][0]]
+        # One-hot encode: this must result in the same columns as during fit
+        cross = pd.get_dummies(cross, dtype=float) 
         
-        cross['relevance'] = (np.sin(cross['prob']) + 1) * np.exp(cross['prob'] - 1) * np.log1p(cross["orig_price"]) * np.cos(cross["orig_price"] / 100) * (1 + np.tan(cross['prob'] * np.pi / 4))
-        
-        cross = cross.sort_values(by=['user_idx', 'relevance'], ascending=[True, False])
-        cross = cross.groupby('user_idx').head(k)
+        # Scale price
+        if 'price' in cross.columns:
+            cross['price'] = self.scalar.transform(cross[['price']])
+        else:
+            print("Warning: 'price' column not found for SVM scaling during predict.")
 
-        cross['price'] = cross['orig_price']
+        # Align columns with training features: add missing (with 0) and reorder
+        missing_cols = set(self.feature_names_in_) - set(cross.columns)
+        for c in missing_cols:
+            cross[c] = 0
+        cross = cross[self.feature_names_in_] # Ensure order and presence of all fit-time features
+
+        cross['prob'] = self.model.predict_proba(cross)[:, np.where(self.model.classes_ == 1)[0][0]]
         
-        # Convert back to Spark and fix schema types to match original log
-        from pyspark.sql.types import LongType
-        result = pandas_to_spark(cross)
-        result = result.withColumn("user_idx", sf.col("user_idx").cast(LongType()))
-        result = result.withColumn("item_idx", sf.col("item_idx").cast(LongType()))
+        # Retrieve user_idx, item_idx that were part of `cross` before feature alignment
+        # Need to re-join them or carry them carefully. Let's re-fetch from cross_df_spark for safety.
+        # This assumes `cross` (after get_dummies and feature alignment) has the same row order as `cross_df_spark.toPandas()` initial call.
+        # This is risky. A better way is to keep index or IDs through transformations.
+        
+        # For simplicity, let's assume the `cross` DataFrame still implicitly has user_idx, item_idx from its construction
+        # before feature selection for predict_proba. We need to add them back for the final output.
+        # The `cross_df_spark.toPandas()` created `cross` which had user_idx, item_idx. 
+        # We need to ensure they are preserved or re-added before sorting and grouping.
+        # Let's reconstruct `cross` to include `user_idx` and `item_idx` from the start for clarity
+
+        # Re-evaluate the cross join and pandas conversion for predict to ensure IDs are kept
+        # The original `cross` was: users.join(items).drop('__iter__').toPandas().copy()
+        # users DataFrame has user_idx, segment, user_attr_*
+        # items DataFrame has item_idx, category, item_attr_*, price
+
+        # Let's rebuild the `cross` DataFrame for prediction carefully
+        # Select necessary columns from users and items *before* the cross join
+        predict_users_df = users.select([col for col in users.columns if col.startswith("user_attr_") or col == "user_idx" or col == "segment"])
+        predict_items_df = items.select([col for col in items.columns if col.startswith("item_attr_") or col == "item_idx" or col == "price" or col == "category"])
+
+        cross_pd = predict_users_df.crossJoin(predict_items_df).toPandas()
+        
+        # Store IDs and original price for later use
+        ids_and_orig_price = cross_pd[['user_idx', 'item_idx', 'price']].rename(columns={'price': 'orig_price'})
+
+        # Prepare features for SVM
+        features_pd = pd.get_dummies(cross_pd.drop(['user_idx', 'item_idx'], axis=1), dtype=float)
+        if 'price' in features_pd.columns: # Price is now a feature to be scaled
+            features_pd['price'] = self.scalar.transform(features_pd[['price']])
+        else:
+            print("Warning: 'price' column not found in features_pd for SVM scaling during predict.")
+
+        # Align columns with training features
+        for col_name in self.feature_names_in_:
+            if col_name not in features_pd.columns:
+                features_pd[col_name] = 0 # Add missing columns seen during fit as 0
+        features_pd = features_pd[self.feature_names_in_] # Ensure order and presence
+
+        probabilities = self.model.predict_proba(features_pd)[:, np.where(self.model.classes_ == 1)[0][0]]
+        
+        # Combine IDs, original price, and probabilities
+        result_pd = ids_and_orig_price
+        result_pd['prob'] = probabilities
+
+        # Apply the custom relevance calculation
+        result_pd['relevance'] = (np.sin(result_pd['prob']) + 1) * \
+                                 np.exp(result_pd['prob'] - 1) * \
+                                 np.log1p(result_pd["orig_price"]) * \
+                                 np.cos(result_pd["orig_price"] / 100) * \
+                                 (1 + np.tan(result_pd['prob'] * np.pi / 4))
+        
+        result_pd = result_pd.sort_values(by=['user_idx', 'relevance'], ascending=[True, False])
+        result_pd = result_pd.groupby('user_idx').head(k)
+
+        # Price column for final output should be orig_price
+        result_pd['price'] = result_pd['orig_price']
+        
+        # Select and rename columns for final Spark DataFrame to match expected schema
+        # Expected: user_idx, item_idx, relevance (and possibly price if used by simulator evaluation)
+        final_cols_pd = result_pd[['user_idx', 'item_idx', 'relevance', 'price']]
+        
+        # Convert back to Spark and fix schema types
+        from pyspark.sql.types import LongType, DoubleType
+        # Define schema explicitly to ensure correct types
+        spark_schema = (
+            users.select("user_idx").schema # user_idx (LongType)
+            .add("item_idx", LongType(), True)
+            .add("relevance", DoubleType(), True)
+            .add("price", DoubleType(), True) 
+        )
+        result_spark_df = users.sparkSession.createDataFrame(final_cols_pd, schema=spark_schema)
        
-        return result
+        return result_spark_df
         
 
 
