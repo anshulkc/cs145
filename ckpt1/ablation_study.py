@@ -7,6 +7,10 @@ Tests revenue weight, regularization strength, KNN neighbors, and Random Forest 
 
 import os
 import sys
+# Import from repo root
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+
 import time
 import shutil
 import copy

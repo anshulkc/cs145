@@ -9,6 +9,9 @@ Includes primary and secondary metrics plus learning curves analysis.
 
 import os
 import sys
+# Import from repo root
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
