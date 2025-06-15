@@ -61,7 +61,6 @@ from sample_recommenders import (
 from sequence_based_recommenders import (
     AutoRegressiveRecommender,
     RNNRecommender,
-    LSTMRecommender,
     GRURecommender,
     TransformerRecommender,
     SEQUENCE_BASED_CONFIGS
@@ -133,7 +132,6 @@ def run_comprehensive_comparison():
         "AutoRegressive_Order2", 
         "AutoRegressive_Order3",
         "RNN_Basic",
-        "LSTM_Medium",
         "GRU_Efficient",
         "Transformer_Small"
     ]
@@ -146,8 +144,6 @@ def run_comprehensive_comparison():
             recommender = AutoRegressiveRecommender(**config_def["parameters"])
         elif config_def["class"] == "RNNRecommender":
             recommender = RNNRecommender(**config_def["parameters"])
-        elif config_def["class"] == "LSTMRecommender":
-            recommender = LSTMRecommender(**config_def["parameters"])
         elif config_def["class"] == "GRURecommender":
             recommender = GRURecommender(**config_def["parameters"])
         elif config_def["class"] == "TransformerRecommender":
