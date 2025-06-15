@@ -12,4 +12,5 @@ simulator_train_test_data_*
 # macOS
 .DS_Store
 
-ckpt2/*.csv
+ckpt*/*.csv
+ckpt*/*.png
