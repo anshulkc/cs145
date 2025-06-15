@@ -11,7 +11,7 @@ Each includes sequence curation, revenue optimization, and temporal pattern mode
 
 from .base import SequenceBasedRecommenderBase
 from .autoregressive import AutoRegressiveRecommender
-from .rnn_lstm import RNNRecommender, GRURecommender
+from .rnn_lstm import RNNRecommender, GRURecommender, LSTMRecommender
 from .transformer import TransformerRecommender
 
 # Standard configurations for different parameter settings
@@ -121,6 +121,7 @@ __all__ = [
     'AutoRegressiveRecommender',
     'RNNRecommender',
     'GRURecommender',
+    'LSTMRecommender',
     'TransformerRecommender',
     'SEQUENCE_BASED_CONFIGS'
 ] 

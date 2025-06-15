@@ -247,11 +247,12 @@ class TransformerDataset(Dataset):
 
 
 class TransformerRecommender(SequenceBasedRecommenderBase):
-    """Transformer-based sequence recommender."""
+    """Transformer-based sequence recommender with SASRec-style features."""
     
     def __init__(self, seed=None, d_model=128, nhead=8, num_layers=4,
                  sequence_length=30, dropout=0.3, revenue_weight=1.5,
-                 min_sequence_length=2):
+                 min_sequence_length=2, learning_rate=0.001, weight_decay=0.0,
+                 early_stopping_patience=5, use_layer_norm=True):
         """
         Args:
             seed: Random seed for reproducibility
@@ -262,6 +263,10 @@ class TransformerRecommender(SequenceBasedRecommenderBase):
             dropout: Dropout probability
             revenue_weight: Weight for revenue optimization
             min_sequence_length: Minimum sequence length for training
+            learning_rate: Learning rate for optimizer
+            weight_decay: L2 regularization weight
+            early_stopping_patience: Patience for early stopping
+            use_layer_norm: Whether to use layer normalization
         """
         super().__init__(seed=seed, sequence_length=sequence_length,
                          revenue_weight=revenue_weight, min_sequence_length=min_sequence_length)
@@ -270,11 +275,14 @@ class TransformerRecommender(SequenceBasedRecommenderBase):
         self.nhead = nhead
         self.num_layers = num_layers
         self.dropout = dropout
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
+        self.early_stopping_patience = early_stopping_patience
+        self.use_layer_norm = use_layer_norm
         
         # Training parameters
-        self.learning_rate = 0.001
         self.batch_size = 32
-        self.epochs = 10
+        self.epochs = 20
         
         # Model and training objects
         self.model = None
@@ -327,8 +335,12 @@ class TransformerRecommender(SequenceBasedRecommenderBase):
         )
         
         # Initialize optimizer and loss criterion
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
         self.criterion = nn.CrossEntropyLoss(ignore_index=self.vocab_size)  # Ignore padding tokens
+        
+        # Early stopping variables
+        best_loss = float('inf')
+        patience_counter = 0
         
         # Training loop
         self.model.train()
@@ -365,6 +377,16 @@ class TransformerRecommender(SequenceBasedRecommenderBase):
             
             avg_loss = total_loss / num_batches if num_batches > 0 else 0
             print(f"Epoch {epoch+1}/{self.epochs}, Average Loss: {avg_loss:.4f}")
+            
+            # Early stopping check
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience_counter >= self.early_stopping_patience:
+                    print(f"Early stopping at epoch {epoch+1}")
+                    break
         
         self.model.eval()
         print("Training completed")

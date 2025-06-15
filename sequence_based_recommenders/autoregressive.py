@@ -15,104 +15,116 @@ class AutoRegressiveRecommender(SequenceBasedRecommenderBase):
     """
     
     def __init__(self, seed=None, order=2, smoothing_alpha=0.1, 
-                 sequence_length=20, revenue_weight=1.0, min_sequence_length=2):
+                 sequence_length=20, revenue_weight=1.0, min_sequence_length=2,
+                 smoothing_type='additive', backoff_alpha=0.4):
         """
         Args:
             seed: Random seed for reproducibility
             order: N-gram order (1=unigram, 2=bigram, 3=trigram, etc.)
-            smoothing_alpha: Additive smoothing parameter (Laplace smoothing)
+            smoothing_alpha: Smoothing parameter
             sequence_length: Maximum sequence length to consider
             revenue_weight: Weight for revenue optimization
             min_sequence_length: Minimum sequence length for training
+            smoothing_type: Type of smoothing ('additive', 'kneser_ney', 'backoff')
+            backoff_alpha: Backoff weight for interpolation
         """
         super().__init__(seed=seed, sequence_length=sequence_length, 
                          revenue_weight=revenue_weight, min_sequence_length=min_sequence_length)
         
-        self.order = max(1, order)  # Ensure order is at least 1
+        self.order = max(1, order)
         self.smoothing_alpha = smoothing_alpha
+        self.smoothing_type = smoothing_type
+        self.backoff_alpha = backoff_alpha
         
-        # N-gram models
-        self.ngram_counts = defaultdict(Counter)  # (context) -> Counter(next_item)
-        self.context_counts = Counter()  # (context) -> count
-        self.item_counts = Counter()  # item -> count (for unigram fallback)
+        # N-gram models for all orders (for backoff)
+        self.ngram_counts = {}  # order -> {context -> Counter(next_item)}
+        self.context_counts = {}  # order -> {context -> count}
+        for o in range(1, self.order + 1):
+            self.ngram_counts[o] = defaultdict(Counter)
+            self.context_counts[o] = Counter()
+        
+        self.item_counts = Counter()
         self.total_items = 0
         
-        print(f"Initialized AutoRegressive recommender with order={self.order}, smoothing={self.smoothing_alpha}")
+        print(f"Initialized AutoRegressive recommender with order={self.order}, smoothing={self.smoothing_type}")
     
-    def _extract_ngrams(self, sequence: List[int]) -> List[Tuple[Tuple[int, ...], int]]:
+    def _extract_ngrams(self, sequence: List[int]) -> Dict[int, List[Tuple[Tuple[int, ...], int]]]:
         """
-        Extract n-grams from a sequence.
+        Extract n-grams of all orders from a sequence.
         
         Args:
             sequence: List of item indices
             
         Returns:
-            List of (context, next_item) tuples
+            Dict mapping order to list of (context, next_item) tuples
         """
-        ngrams = []
+        ngrams_by_order = {}
         
-        for i in range(len(sequence)):
-            # For unigram (order=1), context is empty
-            if self.order == 1:
-                context = ()
-                next_item = sequence[i]
-                ngrams.append((context, next_item))
-            else:
-                # For higher orders, extract context and next item
-                if i >= self.order - 1:
-                    context = tuple(sequence[i - self.order + 1:i])
+        for order in range(1, self.order + 1):
+            ngrams = []
+            for i in range(len(sequence)):
+                if order == 1:
+                    context = ()
                     next_item = sequence[i]
                     ngrams.append((context, next_item))
+                else:
+                    if i >= order - 1:
+                        context = tuple(sequence[i - order + 1:i])
+                        next_item = sequence[i]
+                        ngrams.append((context, next_item))
+            ngrams_by_order[order] = ngrams
         
-        return ngrams
+        return ngrams_by_order
     
     def _train_model(self) -> None:
         """Train the n-gram model using curated sequences."""
-        print(f"Training {self.order}-gram model...")
+        print(f"Training {self.order}-gram model with {self.smoothing_type} smoothing...")
         
         # Reset counters
-        self.ngram_counts = defaultdict(Counter)
-        self.context_counts = Counter()
+        for order in range(1, self.order + 1):
+            self.ngram_counts[order] = defaultdict(Counter)
+            self.context_counts[order] = Counter()
         self.item_counts = Counter()
         self.total_items = 0
         
         # Process all user sequences
         for user_idx, sequence_data in self.user_sequences.items():
-            # Extract item sequence
             item_sequence = [item_idx for item_idx, _, _, _ in sequence_data]
             
-            # Convert to vocabulary indices
             vocab_sequence = []
             for item_idx in item_sequence:
                 if item_idx in self.item_vocab:
                     vocab_sequence.append(self.item_vocab[item_idx])
             
-            if len(vocab_sequence) < self.order:
+            if len(vocab_sequence) < 2:
                 continue
             
-            # Extract n-grams
-            ngrams = self._extract_ngrams(vocab_sequence)
+            # Extract n-grams for all orders
+            ngrams_by_order = self._extract_ngrams(vocab_sequence)
             
-            # Update counts
-            for context, next_item in ngrams:
-                self.ngram_counts[context][next_item] += 1
-                self.context_counts[context] += 1
-                self.item_counts[next_item] += 1
-                self.total_items += 1
+            # Update counts for all orders
+            for order, ngrams in ngrams_by_order.items():
+                for context, next_item in ngrams:
+                    self.ngram_counts[order][context][next_item] += 1
+                    self.context_counts[order][context] += 1
+                    if order == 1:  # Only count items once
+                        self.item_counts[next_item] += 1
+                        self.total_items += 1
         
-        print(f"Trained on {len(self.ngram_counts)} unique contexts")
-        print(f"Total n-grams: {self.total_items}")
+        total_contexts = sum(len(self.ngram_counts[o]) for o in range(1, self.order + 1))
+        print(f"Trained on {total_contexts} unique contexts across all orders")
+        print(f"Total items: {self.total_items}")
         
-        # Debug: Print some example n-grams
-        if len(self.ngram_counts) > 0:
-            print("Example n-grams:")
-            for i, (context, next_items) in enumerate(list(self.ngram_counts.items())[:3]):
+        # Debug: Print example n-grams for highest order
+        if len(self.ngram_counts[self.order]) > 0:
+            print(f"Example {self.order}-grams:")
+            for i, (context, next_items) in enumerate(list(self.ngram_counts[self.order].items())[:3]):
                 top_items = next_items.most_common(3)
                 print(f"  Context {context} -> {top_items}")
     
     def _get_ngram_probability(self, context: Tuple[int, ...], next_item: int) -> float:
         """
-        Calculate n-gram probability with smoothing.
+        Calculate n-gram probability with smoothing and backoff.
         
         Args:
             context: Context tuple (last n-1 items)
@@ -121,19 +133,54 @@ class AutoRegressiveRecommender(SequenceBasedRecommenderBase):
         Returns:
             Probability of next_item given context
         """
-        # Get counts
-        ngram_count = self.ngram_counts[context][next_item]
-        context_count = self.context_counts[context]
+        order = len(context) + 1
+        
+        if self.smoothing_type == 'additive':
+            return self._get_additive_smoothed_prob(order, context, next_item)
+        elif self.smoothing_type == 'backoff':
+            return self._get_backoff_prob(order, context, next_item)
+        else:
+            return self._get_additive_smoothed_prob(order, context, next_item)
+    
+    def _get_additive_smoothed_prob(self, order: int, context: Tuple[int, ...], next_item: int) -> float:
+        """Additive (Laplace) smoothing."""
+        if order > self.order:
+            order = self.order
+            context = context[-(order-1):] if order > 1 else ()
+        
+        ngram_count = self.ngram_counts[order][context][next_item]
+        context_count = self.context_counts[order][context]
         
         if context_count == 0:
-            # Back-off to unigram probability
             return self._get_unigram_probability(next_item)
         
-        # Apply additive smoothing (Laplace smoothing)
-        # P(next_item | context) = (count(context, next_item) + alpha) / (count(context) + alpha * V)
         smoothed_prob = (ngram_count + self.smoothing_alpha) / (context_count + self.smoothing_alpha * self.vocab_size)
-        
         return smoothed_prob
+    
+    def _get_backoff_prob(self, order: int, context: Tuple[int, ...], next_item: int) -> float:
+        """Backoff smoothing with interpolation."""
+        if order > self.order:
+            order = self.order
+            context = context[-(order-1):] if order > 1 else ()
+        
+        if order == 1:
+            return self._get_unigram_probability(next_item)
+        
+        ngram_count = self.ngram_counts[order][context][next_item]
+        context_count = self.context_counts[order][context]
+        
+        if context_count == 0:
+            # Back off to lower order
+            lower_context = context[1:] if len(context) > 0 else ()
+            return self._get_backoff_prob(order - 1, lower_context, next_item)
+        
+        # Interpolate with lower order
+        higher_order_prob = ngram_count / context_count
+        lower_context = context[1:] if len(context) > 0 else ()
+        lower_order_prob = self._get_backoff_prob(order - 1, lower_context, next_item)
+        
+        interpolated_prob = self.backoff_alpha * higher_order_prob + (1 - self.backoff_alpha) * lower_order_prob
+        return interpolated_prob
     
     def _get_unigram_probability(self, item: int) -> float:
         """
