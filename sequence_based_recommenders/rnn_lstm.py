@@ -1,4 +1,4 @@
-# RNN/LSTM/GRU sequence-based recommenders
+# RNN/GRU sequence-based recommenders
 
 import numpy as np
 import torch
@@ -59,7 +59,7 @@ class RNNModel(nn.Module):
             hidden_size: Hidden size of RNN
             num_layers: Number of RNN layers
             dropout: Dropout probability
-            rnn_type: Type of RNN ('RNN', 'LSTM', 'GRU')
+            rnn_type: Type of RNN ('RNN', 'GRU')
         """
         super(RNNModel, self).__init__()
         
@@ -76,9 +76,6 @@ class RNNModel(nn.Module):
         if rnn_type == 'RNN':
             self.rnn = nn.RNN(embedding_dim, hidden_size, num_layers, 
                              batch_first=True, dropout=dropout if num_layers > 1 else 0)
-        elif rnn_type == 'LSTM':
-            self.rnn = nn.LSTM(embedding_dim, hidden_size, num_layers, 
-                              batch_first=True, dropout=dropout if num_layers > 1 else 0)
         elif rnn_type == 'GRU':
             self.rnn = nn.GRU(embedding_dim, hidden_size, num_layers, 
                              batch_first=True, dropout=dropout if num_layers > 1 else 0)
@@ -138,7 +135,7 @@ class RNNRecommenderBase(SequenceBasedRecommenderBase):
             embedding_dim: Dimension of item embeddings
             revenue_weight: Weight for revenue optimization
             min_sequence_length: Minimum sequence length for training
-            rnn_type: Type of RNN ('RNN', 'LSTM', 'GRU')
+            rnn_type: Type of RNN ('RNN', 'GRU')
         """
         super().__init__(seed=seed, sequence_length=sequence_length,
                          revenue_weight=revenue_weight, min_sequence_length=min_sequence_length)
@@ -298,13 +295,6 @@ class RNNRecommender(RNNRecommenderBase):
     
     def __init__(self, **kwargs):
         super().__init__(rnn_type='RNN', **kwargs)
-
-
-class LSTMRecommender(RNNRecommenderBase):
-    """LSTM-based sequence recommender."""
-    
-    def __init__(self, **kwargs):
-        super().__init__(rnn_type='LSTM', **kwargs)
 
 
 class GRURecommender(RNNRecommenderBase):

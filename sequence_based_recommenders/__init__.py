@@ -3,7 +3,7 @@ Sequence-Based Recommenders Module
 
 Implementations of sequence-based recommendation algorithms:
 - AutoRegressiveRecommender: N-gram autoregressive models for sequential patterns
-- RNNRecommender: RNN/LSTM/GRU implementations for sequence modeling
+- RNNRecommender: RNN/GRU implementations for sequence modeling
 - TransformerRecommender: Transformer/self-attention architectures
 
 Each includes sequence curation, revenue optimization, and temporal pattern modeling.
@@ -11,7 +11,7 @@ Each includes sequence curation, revenue optimization, and temporal pattern mode
 
 from .base import SequenceBasedRecommenderBase
 from .autoregressive import AutoRegressiveRecommender
-from .rnn_lstm import RNNRecommender, LSTMRecommender, GRURecommender
+from .rnn_lstm import RNNRecommender, GRURecommender
 from .transformer import TransformerRecommender
 
 # Standard configurations for different parameter settings
@@ -60,32 +60,6 @@ SEQUENCE_BASED_CONFIGS = [
             "sequence_length": 20,
             "embedding_dim": 32,
             "revenue_weight": 1.0
-        }
-    },
-    {
-        "name": "LSTM_Medium",
-        "class": "LSTMRecommender",
-        "parameters": {
-            "seed": 42,
-            "hidden_size": 128,
-            "num_layers": 2,
-            "dropout": 0.3,
-            "sequence_length": 30,
-            "embedding_dim": 64,
-            "revenue_weight": 1.5
-        }
-    },
-    {
-        "name": "LSTM_Large",
-        "class": "LSTMRecommender",
-        "parameters": {
-            "seed": 42,
-            "hidden_size": 256,
-            "num_layers": 3,
-            "dropout": 0.4,
-            "sequence_length": 50,
-            "embedding_dim": 128,
-            "revenue_weight": 2.0
         }
     },
     {
@@ -146,7 +120,6 @@ __all__ = [
     'SequenceBasedRecommenderBase',
     'AutoRegressiveRecommender',
     'RNNRecommender',
-    'LSTMRecommender', 
     'GRURecommender',
     'TransformerRecommender',
     'SEQUENCE_BASED_CONFIGS'
