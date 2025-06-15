@@ -14,3 +14,5 @@ simulator_train_test_data_*
 
 ckpt*/*.csv
 ckpt*/*.png
+
+*.csv
