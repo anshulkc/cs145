@@ -40,7 +40,7 @@ class NGramAutoRegressiveRecommender:
         self.revenue_weight = revenue_weight
         self.max_sequence_length = max_sequence_length if max_sequence_length and max_sequence_length > 0 else None
         self.seed = seed
-
+        self.is_fitted = False
 
         # Mapping: context tuple -> Counter(next_item -> count)
         self.context_counts: Dict[Tuple[Any, ...], Counter] = defaultdict(Counter)
@@ -65,7 +65,7 @@ class NGramAutoRegressiveRecommender:
         Parameters
         ----------
         log : pyspark.sql.DataFrame
-            DataFrame of user interactions with columns ['user_idx', 'item_idx', 'timestamp'].
+            DataFrame of user interactions with columns ['user_idx', 'item_idx', 'relevance'].
         user_features : pyspark.sql.DataFrame
             DataFrame of user features (ignored by this model).
         item_features : pyspark.sql.DataFrame
@@ -97,223 +97,172 @@ class NGramAutoRegressiveRecommender:
         for row in item_prices_collected:
             self.item_prices[row['item_idx']] = float(row['price'])
 
-        # Define window spec for ordering interactions by user and timestamp
-        user_window_spec = Window.partitionBy("user_idx").orderBy("timestamp")
-
         # Process log to get sequences
         if self.max_sequence_length is not None:
             # Add row number to identify recent items if max_sequence_length is set
             log_with_total_count = log.withColumn("total_count", F.count("item_idx").over(Window.partitionBy("user_idx")))
-            log_with_rn = log_with_total_count.withColumn("rn_asc", F.row_number().over(user_window_spec))
+            log_with_rn = log_with_total_count.withColumn("rn_asc", 
+                F.row_number().over(Window.partitionBy("user_idx").orderBy("item_idx")))
             
             # Keep only rows that are part of the most recent 'max_sequence_length' items
             filtered_log = log_with_rn.filter(F.col("rn_asc") > (F.col("total_count") - self.max_sequence_length))
             
             user_sequences_df = filtered_log.groupBy("user_idx") \
-                                .agg(F.sort_array(F.collect_list(F.struct("timestamp", "item_idx"))).alias("interactions")) \
-                                .select(F.col("interactions.item_idx").alias("sequence"))
-        else: # Use all history
+                .agg(F.collect_list("item_idx").alias("sequence"))
+        else:
             user_sequences_df = log.groupBy("user_idx") \
-                                .agg(F.sort_array(F.collect_list(F.struct("timestamp", "item_idx"))).alias("interactions")) \
-                                .select(F.col("interactions.item_idx").alias("sequence"))
+                .agg(F.collect_list("item_idx").alias("sequence"))
 
         sequences = [row['sequence'] for row in user_sequences_df.collect() if row['sequence']]
 
-
-        # Original fitting logic using the extracted sequences
+        # Train n-gram model
         for seq in sequences:
             if len(seq) == 0:
                 continue
             self.vocab.update(seq)
 
-            # The n-gram model's context has length 'self.n'.
-            # To form a context of length 'self.n' and predict the next item,
-            # we need at least 'self.n' items in the history for that context,
-            # plus one more item to be predicted.
-            # Example: if n=1 (bigram: P(item_k | item_k-1)), context is 1 item.
-            # We pad with 'None's to handle sequence starts.
-            # A context (item_0) predicts item_1. padded_seq = [None]*(n-1) + seq
-            # For n=1, padded_seq = seq. Iteration: (n-1) to len-1. context is padded_seq[i-n+1 : i+1]
-            # if n=1: padded_seq[i:i+1] e.g. (seq[i])
-            # next_item is padded_seq[i+1] e.g. seq[i+1]
+            # Pad sequence for n-gram context
+            padded_seq = [None] * (self.n - 1) + list(seq)
             
-            # Padding to handle start of sequences consistently with original logic
-            # Context has length self.n.
-            # (item_{t-n}, ..., item_{t-1}) -> item_t
-            padded_seq = [None] * (self.n -1) + list(seq) if self.n > 0 else list(seq) # Ensure correct padding for n=0 logic if it existed. Here n>=1
-            
-            # Iterate to form (context, next_item) pairs
-            # We need i to go up to len(padded_seq) - 2 to have a next_item
-            # The context ends at index i. The next_item is at i+1.
-            # Context starts at i - self.n + 1.
-            # Range for i: self.n - 1 to len(padded_seq) - 2
+            # Extract n-grams
             for i in range(self.n - 1, len(padded_seq) - 1):
-                context = tuple(padded_seq[i - self.n + 1 : i + 1]) # Context of length n
+                context = tuple(padded_seq[i - self.n + 1 : i + 1])
                 next_item = padded_seq[i + 1]
                 self.context_counts[context][next_item] += 1
-                
-        # Pre‑compute denominators for speed at inference
+
+        # Pre-compute denominators for smoothing
         V = len(self.vocab)
-        if V == 0 and self.smoothing > 0: # Handle empty vocab case to avoid division by zero if only smoothing is non-zero
-             # Denominators will be self.smoothing * V, effectively V cannot be 0 here if smoothing >0
-             # If V is 0, all probs should be 0 unless smoothing implies some default.
-             # Let's ensure V is at least 1 for smoothing calculation if smoothing > 0 and V=0 initially.
-             # This edge case (no items seen at all) means prediction is not really possible.
-             # Probabilities will be 0 if V=0 as calculated in predict_proba.
-             pass
-
-
         for ctx, counter in self.context_counts.items():
-            # Denominator: sum of counts for this context + k * |Vocabulary|
-            denom = sum(counter.values()) + self.smoothing * V 
+            denom = sum(counter.values()) + self.smoothing * V
             self._context_denoms[ctx] = denom
-        
-        # For contexts not seen, denom will be calculated on the fly in predict_proba
-        # as (0 + self.smoothing * V) if that context is queried.
+
+        self.is_fitted = True
 
     # --------------------------------------------------------------------- #
     #                             Inference                                 #
     # --------------------------------------------------------------------- #
 
     def _get_context(self, history: Sequence[Any]) -> Tuple[Any, ...]:
-        """Return the length‑n context tuple derived from the given history."""
-        # If history is shorter than n, pad with Nones at the beginning.
-        # Example: n=3. history=[item1, item2]. Context should be (None, item1, item2)
-        # Example: n=3. history=[item1]. Context should be (None, None, item1)
+        """Get the n-gram context from history."""
         if not history:
             return tuple([None] * self.n)
         
         padding_needed = max(0, self.n - len(history))
-        padded_history_list = [None] * padding_needed + list(history)
-        return tuple(padded_history_list[-self.n:])
+        padded_history = [None] * padding_needed + list(history)
+        return tuple(padded_history[-self.n:])
 
 
-    def _predict_proba_single_candidate(self, history_context: Tuple[Any, ...], candidate_item: Any) -> float:
-        """Compute smoothed probability for a single candidate item given a history context."""
-        if not self.vocab: # Model not fitted or no items seen
+    def _predict_proba_single_candidate(self, context: Tuple[Any, ...], 
+                                      candidate_item: Any) -> float:
+        """Calculate probability for a single candidate item."""
+        if not self.vocab:
             return 0.0
 
-        counter = self.context_counts.get(history_context, Counter())
+        counter = self.context_counts.get(context, Counter())
         count = counter.get(candidate_item, 0)
         
         V = len(self.vocab)
-        # Denominator for this context. If context was seen, it's precomputed.
-        # If context was not seen, its count sum is 0. Denom becomes smoothing * V.
-        denom = self._context_denoms.get(history_context, self.smoothing * V)
-
-        if denom == 0: # Can happen if V=0 and smoothing=0
+        denom = self._context_denoms.get(context, self.smoothing * V)
+        
+        if denom == 0:
             return 0.0
             
-        prob = (count + self.smoothing) / denom
-        return prob
+        return (count + self.smoothing) / denom
 
-    def predict(self, log: Any, k: int, users: Any, items: Any, user_features: Optional[Any] = None, item_features: Optional[Any] = None, filter_seen_items: bool = True, **kwargs: Any) -> Any:
+    def predict(self, log: Any, k: int, users: Any, items: Any, 
+                user_features: Optional[Any] = None, 
+                item_features: Optional[Any] = None, 
+                filter_seen_items: bool = True) -> Any:
         """
-        Rank candidate items by expected revenue and return top-k recommendations for multiple users.
-        Expected revenue = price * P(next_item | history) * revenue_weight.
-
+        Generate recommendations for users.
+        
         Parameters
         ----------
         log : pyspark.sql.DataFrame
-            Full interaction log, used to get each user's most recent history for context.
+            Interaction log with user_idx, item_idx, and relevance columns
         k : int
-            Number of items to return per user.
+            Number of items to recommend
         users : pyspark.sql.DataFrame
-            DataFrame of user_idx for whom to make predictions.
+            Users to recommend for
         items : pyspark.sql.DataFrame
-            DataFrame of candidate items with 'item_idx' (all items to consider for recommendation).
+            Candidate items
         user_features : pyspark.sql.DataFrame, optional
-            User features (unused by this model in predict, but part of API).
+            User features (unused)
         item_features : pyspark.sql.DataFrame, optional
-            Item features (prices are used from self.item_prices, which is filled during fit).
-        filter_seen_items : bool, optional
-            Whether to filter out items already seen by the user. Defaults to True.
-        **kwargs : dict
-            Additional arguments (unused).
-
+            Item features (prices used from self.item_prices)
+        filter_seen_items : bool
+            Whether to filter out already seen items
+            
         Returns
         -------
         pyspark.sql.DataFrame
-            Top-k recommendations with columns ['user_idx', 'item_idx', 'relevance'].
+            Recommendations with columns ['user_idx', 'item_idx', 'relevance']
         """
-        spark_session = users.sparkSession
+        if not self.is_fitted:
+            print("Model not fitted. Returning empty recommendations.")
+            return self._create_empty_recommendations(users.sparkSession)
 
-        if not self.vocab: # No data seen during fit
-            print("NGramAutoRegressiveRecommender: Vocab is empty. Returning empty recommendations.")
-            schema = StructType([
-                StructField("user_idx", LongType(), True),
-                StructField("item_idx", LongType(), True),
-                StructField("relevance", DoubleType(), True)
-            ])
-            return spark_session.createDataFrame([], schema)
+        # Get user histories
+        user_histories = {}
+        if log is not None:
+            for user_id in users.select('user_idx').distinct().collect():
+                user_id = user_id['user_idx']
+                user_log = log.filter(F.col("user_idx") == user_id) \
+                    .select("item_idx") \
+                    .collect()
+                
+                history = [row['item_idx'] for row in user_log]
+                if self.max_sequence_length:
+                    history = history[-self.max_sequence_length:]
+                user_histories[user_id] = history
 
-        user_ids_list = [row['user_idx'] for row in users.select('user_idx').distinct().collect()]
+        # Generate recommendations
+        all_recs = []
+        candidate_items = [row['item_idx'] for row in items.select('item_idx').distinct().collect()]
         
-        candidate_items_collected_rows = items.select("item_idx").distinct().collect()
-        candidate_item_ids = [row['item_idx'] for row in candidate_items_collected_rows]
-
-        all_recs_data = []
-
-        for user_id in user_ids_list:
-            user_history_sequence: List[Any] = []
-            if log:
-                # Filter log for the current user and order by timestamp
-                user_log_df = log.filter(F.col("user_idx") == user_id).orderBy(F.col("timestamp"))
-                
-                # Collect item_idx to form the sequence
-                full_user_sequence_from_log = [row['item_idx'] for row in user_log_df.select("item_idx").collect()]
-
-                if self.max_sequence_length is not None:
-                    user_history_sequence = full_user_sequence_from_log[-self.max_sequence_length:]
-                else:
-                    user_history_sequence = full_user_sequence_from_log
+        for user_id in users.select('user_idx').distinct().collect():
+            user_id = user_id['user_idx']
+            history = user_histories.get(user_id, [])
+            context = self._get_context(history)
             
-            history_context = self._get_context(user_history_sequence)
-            
-            user_recommendations = []
-            for item_id_candidate in candidate_item_ids:
-                prob = self._predict_proba_single_candidate(history_context, item_id_candidate)
-                price = self.item_prices.get(item_id_candidate, 0.0) # Default to 0 if price not found
-                
+            # Score each candidate item
+            for item_id in candidate_items:
+                if filter_seen_items and item_id in history:
+                    continue
+                    
+                prob = self._predict_proba_single_candidate(context, item_id)
+                price = self.item_prices.get(item_id, 0.0)
                 score = price * prob * self.revenue_weight
-                if score > 0 : # Only consider items with a positive score
-                    user_recommendations.append({'user_idx': user_id, 'item_idx': item_id_candidate, 'relevance': float(score)})
+                
+                if score > 0:
+                    all_recs.append({
+                        'user_idx': user_id,
+                        'item_idx': item_id,
+                        'relevance': float(score)
+                    })
+
+        # Create recommendations DataFrame
+        if not all_recs:
+            return self._create_empty_recommendations(users.sparkSession)
             
-            all_recs_data.extend(user_recommendations)
+        recs_df = users.sparkSession.createDataFrame(all_recs)
+        
+        # Rank and select top-k
+        window_spec = Window.partitionBy("user_idx").orderBy(F.desc("relevance"))
+        ranked_recs = recs_df.withColumn("rank", F.row_number().over(window_spec))
+        top_k_recs = ranked_recs.filter(F.col("rank") <= k) \
+            .select("user_idx", "item_idx", "relevance")
+            
+        return top_k_recs
 
-        if not all_recs_data:
-            print("NGramAutoRegressiveRecommender: No recommendations generated. Returning empty DataFrame.")
-            schema = StructType([
-                StructField("user_idx", LongType(), True),
-                StructField("item_idx", LongType(), True),
-                StructField("relevance", DoubleType(), True)
-            ])
-            return spark_session.createDataFrame([], schema)
-
-        # Create Spark DataFrame from the collected recommendations
-        recs_df_schema = StructType([
+    def _create_empty_recommendations(self, spark_session):
+        """Create empty recommendations DataFrame with correct schema."""
+        schema = StructType([
             StructField("user_idx", LongType(), True),
             StructField("item_idx", LongType(), True),
             StructField("relevance", DoubleType(), True)
         ])
-        recs_df = spark_session.createDataFrame(all_recs_data, schema=recs_df_schema)
-
-        # Filter seen items if requested
-        if filter_seen_items and log is not None:
-            seen_items = log.select("user_idx", "item_idx").distinct()
-            recs_df = recs_df.join(
-                seen_items,
-                on=["user_idx", "item_idx"],
-                how="left_anti"
-            )
-
-        # Rank items by relevance for each user and select top-k
-        window_spec = Window.partitionBy("user_idx").orderBy(F.desc("relevance"))
-        ranked_recs_df = recs_df.withColumn("rank", F.row_number().over(window_spec))
-        
-        top_k_recs_df = ranked_recs_df.filter(F.col("rank") <= k).select("user_idx", "item_idx", "relevance")
-        
-        return top_k_recs_df
+        return spark_session.createDataFrame([], schema)
 
     # --------------------------------------------------------------------- #
     #                           Persistence                                 #

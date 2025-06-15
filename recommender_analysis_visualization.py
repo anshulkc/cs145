@@ -454,17 +454,15 @@ def run_recommender_analysis():
     
     # Initialize recommenders to compare
     recommenders = [
+        NGramAutoRegressiveRecommender(n=2, smoothing=0.5, revenue_weight=1.0, max_sequence_length=20, seed=42),
         AutoRegressiveRecommender(seed=42),
         TransformerRecommender(seed=42),
         KNeighborsRecommender(seed=42), 
         LogisticRegressionRecommender(seed=42),
-        RandomForestRecommender(seed=42),
-        RandomRecommender(seed=42),
-        PopularityRecommender(alpha=1.0, seed=42),
-        ContentBasedRecommender(similarity_threshold=0.0, seed=42),
-        MyRecommender(seed=42)  # Add your custom recommender here
+        RandomForestRecommender(seed=42, n_estimators=100),
+        RandomForestRecommender(seed=42, n_estimators=150),
     ]
-    recommender_names = ["AR_Recommender", "Transformer", "KNN", "Logistic_Regression", "Random_Forest", "Random", "Popularity", "ContentBased", "MyRecommender"]
+    recommender_names = ["NGram_AR_Original", "AR_Recommender", "Transformer", "KNN", "Logistic_Regression", "Random_Forest(100)", "Random_Forest(150)"]
     
     # Initialize recommenders with initial history
     for recommender in recommenders:
