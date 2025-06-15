@@ -46,6 +46,14 @@ from sample_recommenders import (
     ContentBasedRecommender, 
     SVMRecommender, 
 )
+#import custom-built recommenders
+from sequence_based_recommenders.autoregressive import AutoRegressiveRecommender
+from sequence_based_recommenders.transformer import TransformerRecommender
+from autoregressive_original import NGramAutoRegressiveRecommender
+from content_based_recommenders.logistic_regression import LogisticRegressionRecommender
+from content_based_recommenders.knn import KNeighborsRecommender
+from content_based_recommenders.random_forest import MyRecommender as RandomForestRecommender
+
 from config import DEFAULT_CONFIG, EVALUATION_METRICS
 
 # Cell: Define custom recommender template
@@ -446,13 +454,17 @@ def run_recommender_analysis():
     
     # Initialize recommenders to compare
     recommenders = [
-        SVMRecommender(seed=42), 
+        AutoRegressiveRecommender(seed=42),
+        TransformerRecommender(seed=42),
+        KNeighborsRecommender(seed=42), 
+        LogisticRegressionRecommender(seed=42),
+        RandomForestRecommender(seed=42),
         RandomRecommender(seed=42),
         PopularityRecommender(alpha=1.0, seed=42),
         ContentBasedRecommender(similarity_threshold=0.0, seed=42),
         MyRecommender(seed=42)  # Add your custom recommender here
     ]
-    recommender_names = ["SVM", "Random", "Popularity", "ContentBased", "MyRecommender"]
+    recommender_names = ["AR_Recommender", "Transformer", "KNN", "Logistic_Regression", "Random_Forest", "Random", "Popularity", "ContentBased", "MyRecommender"]
     
     # Initialize recommenders with initial history
     for recommender in recommenders:

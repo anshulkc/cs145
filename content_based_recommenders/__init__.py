@@ -12,7 +12,7 @@ Each includes revenue optimization and position bias handling.
 from .base import ContentBasedRecommenderBase
 from .logistic_regression import LogisticRegressionRecommender
 from .knn import KNeighborsRecommender
-from .random_forest import RandomForestRecommender
+from .random_forest import MyRecommender as RandomForestRecommender
 
 # Standard configurations for different parameter settings
 CONTENT_BASED_CONFIGS = [
