@@ -30,6 +30,7 @@ GRAPH_BASED_CONFIGS = [
             "epochs": 50,
             "num_negative": 5,
             "batch_size": 512,
+            "early_stopping_patience": 10,
             "edge_weight_strategy": "frequency",
             "revenue_weight": 1.0,
             "seed": 42
@@ -43,12 +44,13 @@ GRAPH_BASED_CONFIGS = [
             "walk_length": 20,
             "num_walks": 20,
             "window_size": 10,
-            "p": 0.5,  # More exploration
-            "q": 2.0,  # Less return to previous node
+            "p": 0.5,
+            "q": 2.0,
             "learning_rate": 0.005,
             "epochs": 100,
             "num_negative": 10,
             "batch_size": 1024,
+            "early_stopping_patience": 15,
             "edge_weight_strategy": "recency",
             "revenue_weight": 1.5,
             "seed": 42
@@ -65,6 +67,8 @@ GRAPH_BASED_CONFIGS = [
             "batch_size": 512,
             "reg_weight": 1e-4,
             "negative_sampling_ratio": 1.0,
+            "early_stopping_patience": 10,
+            "graph_dropout": 0.1,
             "edge_weight_strategy": "frequency",
             "revenue_weight": 1.0,
             "seed": 42
@@ -81,6 +85,8 @@ GRAPH_BASED_CONFIGS = [
             "batch_size": 1024,
             "reg_weight": 1e-4,
             "negative_sampling_ratio": 1.5,
+            "early_stopping_patience": 15,
+            "graph_dropout": 0.15,
             "edge_weight_strategy": "purchase_amount",
             "revenue_weight": 1.2,
             "seed": 42
@@ -98,6 +104,9 @@ GRAPH_BASED_CONFIGS = [
             "batch_size": 512,
             "reg_weight": 1e-4,
             "negative_sampling_ratio": 1.0,
+            "early_stopping_patience": 10,
+            "use_batch_norm": True,
+            "graph_dropout": 0.1,
             "edge_weight_strategy": "frequency",
             "revenue_weight": 1.0,
             "seed": 42
@@ -115,6 +124,9 @@ GRAPH_BASED_CONFIGS = [
             "batch_size": 1024,
             "reg_weight": 1e-3,
             "negative_sampling_ratio": 2.0,
+            "early_stopping_patience": 15,
+            "use_batch_norm": True,
+            "graph_dropout": 0.2,
             "edge_weight_strategy": "recency",
             "revenue_weight": 1.3,
             "seed": 42

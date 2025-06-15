@@ -100,7 +100,8 @@ class LightGCNRecommender(GraphBasedRecommenderBase):
     """
     
     def __init__(self, embedding_dim=128, n_layers=3, learning_rate=0.001, epochs=100,
-                 batch_size=1024, reg_weight=1e-4, negative_sampling_ratio=1.0, **kwargs):
+                 batch_size=1024, reg_weight=1e-4, negative_sampling_ratio=1.0, 
+                 early_stopping_patience=10, graph_dropout=0.1, **kwargs):
         """
         Args:
             embedding_dim: Dimension of user/item embeddings
@@ -110,6 +111,8 @@ class LightGCNRecommender(GraphBasedRecommenderBase):
             batch_size: Training batch size
             reg_weight: L2 regularization weight
             negative_sampling_ratio: Ratio of negative samples to positive samples
+            early_stopping_patience: Patience for early stopping
+            graph_dropout: Graph dropout rate (randomly remove edges)
         """
         super().__init__(**kwargs)
         self.embedding_dim = embedding_dim
@@ -119,6 +122,8 @@ class LightGCNRecommender(GraphBasedRecommenderBase):
         self.batch_size = batch_size
         self.reg_weight = reg_weight
         self.negative_sampling_ratio = negative_sampling_ratio
+        self.early_stopping_patience = early_stopping_patience
+        self.graph_dropout = graph_dropout
         
         # Model components
         self.model = None
@@ -213,6 +218,27 @@ class LightGCNRecommender(GraphBasedRecommenderBase):
         print(f"Training data prepared: {len(self.positive_interactions)} positive, {num_negatives} negative samples")
         return training_data
     
+    def _apply_graph_dropout(self, adj_matrix: torch.Tensor) -> torch.Tensor:
+        """Apply graph dropout by randomly removing edges."""
+        if self.graph_dropout <= 0:
+            return adj_matrix
+        
+        # Get indices and values from sparse matrix
+        indices = adj_matrix._indices()
+        values = adj_matrix._values()
+        
+        # Create dropout mask
+        dropout_mask = torch.rand(values.size(0)) > self.graph_dropout
+        
+        # Apply mask
+        kept_indices = indices[:, dropout_mask]
+        kept_values = values[dropout_mask]
+        
+        # Create new sparse matrix
+        dropped_adj = torch.sparse.FloatTensor(kept_indices, kept_values, adj_matrix.size())
+        
+        return dropped_adj
+    
     def _train_model(self) -> None:
         """Train LightGCN model using BPR loss."""
         if self.graph is None or self.graph.number_of_nodes() == 0:
@@ -235,11 +261,20 @@ class LightGCNRecommender(GraphBasedRecommenderBase):
         
         print(f"Training LightGCN model for {self.epochs} epochs...")
         
+        # Early stopping variables
+        best_loss = float('inf')
+        patience_counter = 0
+        
         # Training loop
         for epoch in range(self.epochs):
             self.model.train()
             total_loss = 0
             num_batches = 0
+            
+            # Apply graph dropout by creating modified adjacency matrix
+            if self.graph_dropout > 0:
+                adj_matrix = self._apply_graph_dropout(self.adjacency_matrix)
+                self.model.set_adjacency_matrix(adj_matrix, degree_matrix)
             
             # Shuffle training data
             random.shuffle(training_data)
@@ -270,8 +305,21 @@ class LightGCNRecommender(GraphBasedRecommenderBase):
                 total_loss += loss.item()
                 num_batches += 1
             
+            # Calculate average loss for this epoch
+            avg_loss = total_loss / max(num_batches, 1)
+            
+            # Early stopping check
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                
+            if patience_counter >= self.early_stopping_patience:
+                print(f"Early stopping at epoch {epoch + 1}")
+                break
+            
             if (epoch + 1) % 20 == 0:
-                avg_loss = total_loss / max(num_batches, 1)
                 print(f"Epoch {epoch + 1}/{self.epochs}, Average Loss: {avg_loss:.4f}")
         
         print("LightGCN training completed")

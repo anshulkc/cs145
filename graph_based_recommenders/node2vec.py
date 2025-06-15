@@ -70,7 +70,7 @@ class Node2VecRecommender(GraphBasedRecommenderBase):
     
     def __init__(self, embedding_dim=128, walk_length=20, num_walks=10, window_size=5,
                  p=1.0, q=1.0, learning_rate=0.01, epochs=100, num_negative=5,
-                 batch_size=512, **kwargs):
+                 batch_size=512, early_stopping_patience=10, **kwargs):
         """
         Args:
             embedding_dim: Dimension of node embeddings
@@ -83,6 +83,7 @@ class Node2VecRecommender(GraphBasedRecommenderBase):
             epochs: Number of training epochs
             num_negative: Number of negative samples per positive sample
             batch_size: Training batch size
+            early_stopping_patience: Patience for early stopping
         """
         super().__init__(**kwargs)
         self.embedding_dim = embedding_dim
@@ -95,6 +96,7 @@ class Node2VecRecommender(GraphBasedRecommenderBase):
         self.epochs = epochs
         self.num_negative = num_negative
         self.batch_size = batch_size
+        self.early_stopping_patience = early_stopping_patience
         
         # Model components
         self.model = None
@@ -222,6 +224,10 @@ class Node2VecRecommender(GraphBasedRecommenderBase):
         
         print(f"Training Node2Vec model for {self.epochs} epochs...")
         
+        # Early stopping variables
+        best_loss = float('inf')
+        patience_counter = 0
+        
         # Training loop
         for epoch in range(self.epochs):
             total_loss = 0
@@ -250,8 +256,21 @@ class Node2VecRecommender(GraphBasedRecommenderBase):
                 total_loss += loss.item()
                 num_batches += 1
             
+            # Calculate average loss for this epoch
+            avg_loss = total_loss / max(num_batches, 1)
+            
+            # Early stopping check
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                
+            if patience_counter >= self.early_stopping_patience:
+                print(f"Early stopping at epoch {epoch + 1}")
+                break
+            
             if (epoch + 1) % 20 == 0:
-                avg_loss = total_loss / max(num_batches, 1)
                 print(f"Epoch {epoch + 1}/{self.epochs}, Average Loss: {avg_loss:.4f}")
         
         # Store final embeddings
