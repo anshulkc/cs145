@@ -58,6 +58,13 @@ from transformers import TransformerRecommender
 
 from config import DEFAULT_CONFIG, EVALUATION_METRICS
 
+# Import sequence-based recommenders for checkpoint 2
+try:
+    from sequence_based_recommenders.transformer import TransformerRecommender
+except ImportError:
+    print("Warning: TransformerRecommender not found. Using template MyRecommender instead.")
+    TransformerRecommender = None
+
 # Cell: Define custom recommender template
 """
 ## MyRecommender Template
