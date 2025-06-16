@@ -54,7 +54,7 @@ from content_based_recommenders.logistic_regression import LogisticRegressionRec
 from content_based_recommenders.knn import KNeighborsRecommender
 from content_based_recommenders.random_forest import MyRecommender as RandomForestRecommender
 from lstm import LSTMRecommender
-from transformers import TransformerRecommender
+from transformers import TransformerRecommender as TransformerRecommenderNew
 
 from config import DEFAULT_CONFIG, EVALUATION_METRICS
 
@@ -463,8 +463,8 @@ def run_recommender_analysis():
     
     # Initialize recommenders to compare
     recommenders = [
+        TransformerRecommenderNew(seed=42),
         LSTMRecommender(seed=42),
-        TransformerRecommender(seed=42),
         NGramAutoRegressiveRecommender(n=2, smoothing=0.5, revenue_weight=1.0, max_sequence_length=20, seed=42),
         AutoRegressiveRecommender(seed=42),
         TransformerRecommender(seed=42),
@@ -473,7 +473,7 @@ def run_recommender_analysis():
         RandomForestRecommender(seed=42, n_estimators=100),
         RandomForestRecommender(seed=42, n_estimators=150),
     ]
-    recommender_names = ["LSTMRecommender", "TransformerRecommender", "NGram_AR_Original", "AR_Recommender", "Transformer", "KNN", "Logistic_Regression", "Random_Forest(100)", "Random_Forest(150)"]
+    recommender_names = ["TransformerRecommenderNew", "LSTMRecommender", "NGram_AR_Original", "AR_Recommender", "Transformer", "KNN", "Logistic_Regression", "Random_Forest(100)", "Random_Forest(150)"]
     
     # Initialize recommenders with initial history
     for recommender in recommenders:
