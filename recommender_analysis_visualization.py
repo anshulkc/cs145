@@ -46,6 +46,16 @@ from sample_recommenders import (
     ContentBasedRecommender, 
     SVMRecommender, 
 )
+#import custom-built recommenders
+from sequence_based_recommenders.autoregressive import AutoRegressiveRecommender
+from sequence_based_recommenders.transformer import TransformerRecommender
+from autoregressive_original import NGramAutoRegressiveRecommender
+from content_based_recommenders.logistic_regression import LogisticRegressionRecommender
+from content_based_recommenders.knn import KNeighborsRecommender
+from content_based_recommenders.random_forest import MyRecommender as RandomForestRecommender
+from lstm import LSTMRecommender
+from transformers import TransformerRecommender
+
 from config import DEFAULT_CONFIG, EVALUATION_METRICS
 
 # Import sequence-based recommenders for checkpoint 2
@@ -453,30 +463,17 @@ def run_recommender_analysis():
     
     # Initialize recommenders to compare
     recommenders = [
-        SVMRecommender(seed=42), 
-        RandomRecommender(seed=42),
-        PopularityRecommender(alpha=1.0, seed=42),
-        ContentBasedRecommender(similarity_threshold=0.0, seed=42),
+        LSTMRecommender(seed=42),
+        TransformerRecommender(seed=42),
+        NGramAutoRegressiveRecommender(n=2, smoothing=0.5, revenue_weight=1.0, max_sequence_length=20, seed=42),
+        AutoRegressiveRecommender(seed=42),
+        TransformerRecommender(seed=42),
+        KNeighborsRecommender(seed=42), 
+        LogisticRegressionRecommender(seed=42),
+        RandomForestRecommender(seed=42, n_estimators=100),
+        RandomForestRecommender(seed=42, n_estimators=150),
     ]
-    recommender_names = ["SVM", "Random", "Popularity", "ContentBased"]
-    
-    # Add sequence-based recommenders if available
-    if TransformerRecommender is not None:
-        recommenders.append(TransformerRecommender(
-            embed_dim=64,
-            num_heads=4,
-            num_layers=2,
-            max_seq_len=50,
-            dropout=0.1,
-            lr=1e-3,
-            n_epochs=3,
-            seed=42
-        ))
-        recommender_names.append("Transformer")
-    else:
-        # Fallback to template recommender
-        recommenders.append(MyRecommender(seed=42))
-        recommender_names.append("MyRecommender")
+    recommender_names = ["LSTMRecommender", "TransformerRecommender", "NGram_AR_Original", "AR_Recommender", "Transformer", "KNN", "Logistic_Regression", "Random_Forest(100)", "Random_Forest(150)"]
     
     # Initialize recommenders with initial history
     for recommender in recommenders:
